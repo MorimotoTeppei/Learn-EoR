@@ -4,8 +4,6 @@ import { usePathname } from "next/navigation";
 
 const NAV_LINKS = [
   { href: "/", label: "ホーム" },
-  { href: "/topics", label: "トピック一覧" },
-  { href: "/timeline", label: "タイムライン" },
 ];
 
 export default function Navbar() {
