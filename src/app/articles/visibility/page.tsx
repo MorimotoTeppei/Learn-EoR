@@ -7,6 +7,9 @@ const C_LIGHT = 3e8;
 const BASELINE = 55;
 const COLORS = ["#378ADD", "#1D9E75", "#D85A30"];
 
+const UV_CSS_SIZE = 200;
+const UV_RANGE = 9;
+
 function useDarkMode() {
   const [dark, setDark] = useState(false);
   useEffect(() => {
@@ -89,6 +92,13 @@ export default function Page() {
   const c3Ref = useRef<HTMLCanvasElement>(null);
   const c4Ref = useRef<HTMLCanvasElement>(null);
   const uvRef = useRef<HTMLCanvasElement>(null);
+
+  // Section 2 interactive u-v explorer
+  const [uvIx, setUvIx] = useState(3);
+  const [uvIy, setUvIy] = useState(2);
+  const uvInteractRef = useRef<HTMLCanvasElement>(null);
+  const stripeInteractRef = useRef<HTMLCanvasElement>(null);
+  const isDraggingUV = useRef(false);
 
   // Section 5 ref
   const cnnplotRef = useRef<HTMLCanvasElement>(null);
@@ -286,6 +296,169 @@ export default function Page() {
   useEffect(() => {
     drawSection2();
   }, [drawSection2]);
+
+  // Section 2 interactive: u-v explorer
+  const drawUVInteract = useCallback(() => {
+    const canvas = uvInteractRef.current;
+    if (!canvas) return;
+    const s = setupCanvas(canvas, UV_CSS_SIZE, UV_CSS_SIZE);
+    if (!s) return;
+    const { ctx, W, H } = s;
+    const sc = (W / 2) / UV_RANGE;
+
+    ctx.fillStyle = dark ? "#2C2C2A" : "#F1EFE8";
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid lines
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 0.5;
+    ctx.globalAlpha = 0.15;
+    for (let i = -8; i <= 8; i += 2) {
+      const gx = W / 2 + i * sc;
+      const gy = H / 2 + i * sc;
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Concentric circles
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 0.5;
+    ctx.globalAlpha = 0.2;
+    for (const r of [2, 4, 6, 8]) {
+      ctx.beginPath();
+      ctx.arc(W / 2, H / 2, r * sc, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Axes
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 0.8;
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Axis labels
+    ctx.fillStyle = muted;
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("u →", W - 4, H / 2 - 5);
+    ctx.textAlign = "left";
+    ctx.fillText("v ↓", W / 2 + 5, 14);
+
+    // Radius tick labels
+    ctx.font = "10px sans-serif";
+    ctx.globalAlpha = 0.5;
+    for (const r of [2, 4, 6]) {
+      ctx.fillText(String(r), W / 2 + r * sc + 2, H / 2 - 3);
+    }
+    ctx.globalAlpha = 1;
+
+    const px = W / 2 + uvIx * sc;
+    const py = H / 2 + uvIy * sc;
+
+    // Line from origin to dot
+    ctx.strokeStyle = "#378ADD";
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath(); ctx.moveTo(W / 2, H / 2); ctx.lineTo(px, py); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Dot
+    ctx.fillStyle = "#378ADD";
+    ctx.beginPath();
+    ctx.arc(px, py, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = dark ? "#1a1a18" : "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }, [uvIx, uvIy, dark, muted]);
+
+  const drawStripeInteract = useCallback(() => {
+    const canvas = stripeInteractRef.current;
+    if (!canvas) return;
+    const s = setupCanvas(canvas, 180, 180);
+    if (!s) return;
+    const { ctx } = s;
+    const PW = canvas.width;
+    const PH = canvas.height;
+    const kx = uvIx;
+    const ky = uvIy;
+
+    const img = ctx.createImageData(PW, PH);
+    for (let y = 0; y < PH; y++) {
+      for (let x = 0; x < PW; x++) {
+        const v = 128 + 127 * Math.sin(2 * Math.PI * (kx * x / PW + ky * y / PH));
+        const i = (y * PW + x) * 4;
+        const c = Math.round(Math.max(0, Math.min(255, v)));
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = c;
+        img.data[i + 3] = 255;
+      }
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.putImageData(img, 0, 0);
+
+    // Re-apply DPR for overlay annotations
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = 180, H = 180;
+    const cx = W / 2, cy = H / 2;
+    const mag = Math.sqrt(kx * kx + ky * ky);
+
+    if (mag > 0.1) {
+      // Stripe direction: perpendicular to k-vector
+      const sx = -ky / mag, sy = kx / mag;
+      const len = 62;
+      ctx.strokeStyle = "#FF6B6B";
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(cx - sx * len, cy - sy * len);
+      ctx.lineTo(cx + sx * len, cy + sy * len);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // k-vector arrow (propagation direction)
+      const kwx = kx / mag, kwy = ky / mag;
+      const klen = 36;
+      ctx.strokeStyle = "#4DD4A3";
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + kwx * klen, cy + kwy * klen);
+      ctx.stroke();
+      const ax = cx + kwx * klen, ay = cy + kwy * klen;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax - kwx * 8 + kwy * 5, ay - kwy * 8 - kwx * 5);
+      ctx.lineTo(ax - kwx * 8 - kwy * 5, ay - kwy * 8 + kwx * 5);
+      ctx.closePath();
+      ctx.fillStyle = "#4DD4A3";
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // Labels with dark backdrop
+      ctx.font = "bold 10px sans-serif";
+      const drawLabel = (text: string, lx: number, ly: number, color: string) => {
+        ctx.textAlign = "center";
+        const m = ctx.measureText(text);
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(lx - m.width / 2 - 3, ly - 11, m.width + 6, 15);
+        ctx.fillStyle = color;
+        ctx.fillText(text, lx, ly);
+      };
+      const lx = cx + sx * (len + 16), ly = cy + sy * (len + 16);
+      drawLabel("縞の方向", Math.max(36, Math.min(W - 36, lx)), Math.max(12, Math.min(H - 4, ly)), "#FF9999");
+      const kx2 = cx + kwx * (klen + 18), ky2 = cy + kwy * (klen + 18);
+      drawLabel("k方向", Math.max(24, Math.min(W - 24, kx2)), Math.max(12, Math.min(H - 4, ky2)), "#80E8C8");
+    }
+  }, [uvIx, uvIy]);
+
+  useEffect(() => { drawUVInteract(); }, [drawUVInteract]);
+  useEffect(() => { drawStripeInteract(); }, [drawStripeInteract]);
 
   // Section 4: frequency-scale mapping
   const drawSection4 = useCallback(() => {
@@ -518,17 +691,53 @@ export default function Page() {
   useEffect(() => {
     function handleResize() {
       drawSection1();
+      drawSection2();
       drawSection4();
       drawSection5(kernelPosRef.current);
+      drawUVInteract();
+      drawStripeInteract();
     }
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [drawSection1, drawSection4, drawSection5]);
+  }, [drawSection1, drawSection2, drawSection4, drawSection5, drawUVInteract, drawStripeInteract]);
 
   // Derived values for Section 4 display
   const lam = C_LIGHT / (freq * 1e6);
   const uval = BASELINE / lam;
   const theta_deg = (lam / BASELINE) * 180 / Math.PI;
+
+  // Interactive u-v event handlers
+  const sc = (UV_CSS_SIZE / 2) / UV_RANGE;
+  const getKCoords = (clientX: number, clientY: number, rect: DOMRect) => {
+    const kx = Math.round(((clientX - rect.left) / rect.width * UV_CSS_SIZE - UV_CSS_SIZE / 2) / sc * 10) / 10;
+    const ky = Math.round(((clientY - rect.top) / rect.height * UV_CSS_SIZE - UV_CSS_SIZE / 2) / sc * 10) / 10;
+    return { kx: Math.max(-8, Math.min(8, kx)), ky: Math.max(-8, Math.min(8, ky)) };
+  };
+  const handleUVMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    isDraggingUV.current = true;
+    const { kx, ky } = getKCoords(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
+    setUvIx(kx); setUvIy(ky);
+  };
+  const handleUVMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDraggingUV.current) return;
+    const { kx, ky } = getKCoords(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
+    setUvIx(kx); setUvIy(ky);
+  };
+  const handleUVMouseUp = () => { isDraggingUV.current = false; };
+  const handleUVTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    isDraggingUV.current = true;
+    const t = e.touches[0];
+    const { kx, ky } = getKCoords(t.clientX, t.clientY, e.currentTarget.getBoundingClientRect());
+    setUvIx(kx); setUvIy(ky);
+  };
+  const handleUVTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!isDraggingUV.current) return;
+    const t = e.touches[0];
+    const { kx, ky } = getKCoords(t.clientX, t.clientY, e.currentTarget.getBoundingClientRect());
+    setUvIx(kx); setUvIy(ky);
+  };
 
   return (
     <>
@@ -604,6 +813,97 @@ export default function Page() {
               <canvas ref={uvRef} width={220} height={220} />
             </div>
             <p className={styles.caption}>各点が一つの縞模様に対応。中心からの距離 ＝ 空間周波数（縞の細かさ）</p>
+          </div>
+
+          {/* Interactive u-v explorer */}
+          <div className={styles.widgetBox} style={{ marginTop: 16 }}>
+            <div className={styles.labelSm} style={{ textAlign: "center" }}>
+              u-v空間の点をドラッグして縞模様を確認
+            </div>
+            <p style={{ fontSize: 13, color: muted, margin: "6px 0 12px", textAlign: "center" }}>
+              点を動かすと右の縞模様がリアルタイムに変わります。赤線＝縞の方向、緑矢印＝k-ベクトル（波の伝播方向）
+            </p>
+            <div style={{ display: "flex", gap: 20, justifyContent: "center", alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 12, color: muted, textAlign: "center", marginBottom: 4 }}>u-v 空間（点をドラッグ）</div>
+                <canvas
+                  ref={uvInteractRef}
+                  width={UV_CSS_SIZE}
+                  height={UV_CSS_SIZE}
+                  style={{ cursor: "crosshair", border: "1px solid var(--border)", borderRadius: 6, display: "block", touchAction: "none" }}
+                  onMouseDown={handleUVMouseDown}
+                  onMouseMove={handleUVMouseMove}
+                  onMouseUp={handleUVMouseUp}
+                  onMouseLeave={handleUVMouseUp}
+                  onTouchStart={handleUVTouchStart}
+                  onTouchMove={handleUVTouchMove}
+                  onTouchEnd={handleUVMouseUp}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: muted, textAlign: "center", marginBottom: 4 }}>対応する縞模様</div>
+                <canvas
+                  ref={stripeInteractRef}
+                  width={180}
+                  height={180}
+                  style={{ border: "1px solid var(--border)", borderRadius: 6, display: "block" }}
+                />
+              </div>
+            </div>
+
+            {/* Info cards */}
+            <div className={styles.infoRow} style={{ marginTop: 14 }}>
+              <div className={styles.infoCard}>
+                <div className="lbl">kx（横方向）</div>
+                <div className="val">{uvIx.toFixed(1)}</div>
+              </div>
+              <div className={styles.infoCard}>
+                <div className="lbl">ky（縦方向）</div>
+                <div className="val">{uvIy.toFixed(1)}</div>
+              </div>
+              <div className={styles.infoCard}>
+                <div className="lbl">空間周波数 |k|</div>
+                <div className="val">{Math.sqrt(uvIx * uvIx + uvIy * uvIy).toFixed(1)}</div>
+              </div>
+              <div className={styles.infoCard}>
+                <div className="lbl">縞の傾き（水平から）</div>
+                <div className="val">{(Math.atan2(uvIx, uvIy) * 180 / Math.PI).toFixed(0)}°</div>
+              </div>
+            </div>
+
+            {/* Preset buttons */}
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", justifyContent: "center" }}>
+              {([
+                { label: "横縞・大スケール", kx: 0, ky: 2 },
+                { label: "縦縞", kx: 3, ky: 0 },
+                { label: "斜め縞45°", kx: 3, ky: 3 },
+                { label: "横縞・細かい", kx: 0, ky: 7 },
+                { label: "斜め細かい", kx: 5, ky: 4 },
+              ] as { label: string; kx: number; ky: number }[]).map((p) => {
+                const active = Math.abs(uvIx - p.kx) < 0.05 && Math.abs(uvIy - p.ky) < 0.05;
+                return (
+                  <button
+                    key={p.label}
+                    onClick={() => { setUvIx(p.kx); setUvIy(p.ky); }}
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 10px",
+                      borderRadius: 6,
+                      border: "1px solid var(--border)",
+                      background: active ? "var(--blue)" : "var(--bg)",
+                      color: active ? "#fff" : "var(--fg)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <p className={styles.caption} style={{ marginTop: 10 }}>
+              中心に近いほど太い縞（大スケール）・遠いほど細かい縞（小スケール）。点の位置の角度が縞の法線方向を決める。kx=0なら横縞、ky=0なら縦縞。
+            </p>
           </div>
         </div>
 
