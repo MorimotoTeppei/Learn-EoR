@@ -19,8 +19,29 @@ function useDarkMode() {
   return dark;
 }
 
-function resizeCanvas(canvas: HTMLCanvasElement) {
-  canvas.width = (canvas.parentElement?.clientWidth ?? 740) - 40;
+type CanvasSetup = { ctx: CanvasRenderingContext2D; W: number; H: number };
+
+/** DPR対応でcanvasをセットアップ。描画はCSS座標(W×H)で行う */
+function setupCanvas(
+  canvas: HTMLCanvasElement,
+  cssW: number,
+  cssH: number
+): CanvasSetup | null {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  canvas.style.width = cssW + "px";
+  canvas.style.height = cssH + "px";
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.scale(dpr, dpr);
+  return { ctx, W: cssW, H: cssH };
+}
+
+/** 親要素幅に合わせてリサイズ */
+function resizeCanvas(canvas: HTMLCanvasElement, cssH: number): CanvasSetup | null {
+  const cssW = (canvas.parentElement?.clientWidth ?? 740) - 40;
+  return setupCanvas(canvas, cssW, cssH);
 }
 
 function roundRect(
@@ -80,17 +101,16 @@ export default function Page() {
     const sigC = sigRef.current;
     const specC = specRef.current;
     if (!sigC || !specC) return;
-    resizeCanvas(sigC);
-    resizeCanvas(specC);
-    const sCtx = sigC.getContext("2d");
-    const spCtx = specC.getContext("2d");
-    if (!sCtx || !spCtx) return;
+    const sig = resizeCanvas(sigC, 130);
+    const spec = resizeCanvas(specC, 150);
+    if (!sig || !spec) return;
+    const { ctx: sCtx, W, H } = sig;
+    const { ctx: spCtx, W: SW, H: SH } = spec;
 
     const amp1 = a1 / 100, amp2 = a2 / 100, amp3 = a3 / 100;
     const freqs = [2, 5, 11];
     const amps = [amp1, amp2, amp3];
 
-    const W = sigC.width, H = sigC.height;
     sCtx.clearRect(0, 0, W, H);
     sCtx.strokeStyle = muted;
     sCtx.lineWidth = 0.5;
@@ -123,7 +143,6 @@ export default function Page() {
     }
     sCtx.stroke();
 
-    const SW = specC.width, SH = specC.height;
     spCtx.clearRect(0, 0, SW, SH);
     spCtx.strokeStyle = muted;
     spCtx.lineWidth = 0.5;
@@ -148,7 +167,7 @@ export default function Page() {
     spCtx.fillStyle = muted;
     spCtx.font = "12px sans-serif";
     spCtx.textAlign = "center";
-    spCtx.fillText("周波数 →", SW / 2, SH - 0);
+    spCtx.fillText("周波数 →", SW / 2, SH);
   }, [a1, a2, a3, fg, muted]);
 
   useEffect(() => {
@@ -157,6 +176,7 @@ export default function Page() {
 
   // Section 2: 2D stripes
   const drawSection2 = useCallback(() => {
+    // stripe canvases: pixel-level imageData → use raw pixel dimensions
     function drawStripe(
       canvas: HTMLCanvasElement | null,
       kx: number,
@@ -164,48 +184,52 @@ export default function Page() {
       amp: number
     ) {
       if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const W = canvas.width, H = canvas.height;
-      const img = ctx.createImageData(W, H);
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const val = 128 + amp * 127 * Math.sin(2 * Math.PI * (kx * x / W + ky * y / H));
-          const i = (y * W + x) * 4;
+      const s = setupCanvas(canvas, 110, 110);
+      if (!s) return;
+      // imageData operates in physical pixels, so use canvas.width/height
+      const PW = canvas.width, PH = canvas.height;
+      const img = s.ctx.createImageData(PW, PH);
+      for (let y = 0; y < PH; y++) {
+        for (let x = 0; x < PW; x++) {
+          const val = 128 + amp * 127 * Math.sin(2 * Math.PI * (kx * x / PW + ky * y / PH));
+          const i = (y * PW + x) * 4;
           img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.round(val);
           img.data[i + 3] = 255;
         }
       }
-      ctx.putImageData(img, 0, 0);
+      // putImageData bypasses transform, so reset scale first
+      s.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      s.ctx.putImageData(img, 0, 0);
     }
 
     function drawCombined() {
       const canvas = c4Ref.current;
       if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const W = canvas.width, H = canvas.height;
-      const img = ctx.createImageData(W, H);
+      const s = setupCanvas(canvas, 110, 110);
+      if (!s) return;
+      const PW = canvas.width, PH = canvas.height;
+      const img = s.ctx.createImageData(PW, PH);
       const waves: [number, number, number][] = [[0, 2, 0.4], [0, 7, 0.3], [3, 3, 0.3]];
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
+      for (let y = 0; y < PH; y++) {
+        for (let x = 0; x < PW; x++) {
           let val = 0;
-          for (const [kx, ky, a] of waves) val += a * Math.sin(2 * Math.PI * (kx * x / W + ky * y / H));
+          for (const [kx, ky, a] of waves) val += a * Math.sin(2 * Math.PI * (kx * x / PW + ky * y / PH));
           val = Math.max(0, Math.min(255, Math.round(128 + val * 127)));
-          const i = (y * W + x) * 4;
+          const i = (y * PW + x) * 4;
           img.data[i] = img.data[i + 1] = img.data[i + 2] = val;
           img.data[i + 3] = 255;
         }
       }
-      ctx.putImageData(img, 0, 0);
+      s.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      s.ctx.putImageData(img, 0, 0);
     }
 
     function drawUV() {
       const canvas = uvRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const W = canvas.width, H = canvas.height;
+      const s = setupCanvas(canvas, 220, 220);
+      if (!s) return;
+      const { ctx, W, H } = s;
       ctx.fillStyle = dark ? "#2C2C2A" : "#F1EFE8";
       ctx.fillRect(0, 0, W, H);
       ctx.strokeStyle = muted;
@@ -267,9 +291,9 @@ export default function Page() {
   const drawSection4 = useCallback(() => {
     const canvas = uvplotRef.current;
     if (!canvas) return;
-    resizeCanvas(canvas);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const setup = resizeCanvas(canvas, 320);
+    if (!setup) return;
+    const { ctx, W, H } = setup;
 
     const f = freq;
     const lam = C_LIGHT / (f * 1e6);
@@ -278,7 +302,6 @@ export default function Page() {
     trailRef.current.push({ f, u });
     if (trailRef.current.length > 100) trailRef.current.shift();
 
-    const W = canvas.width, H = canvas.height;
     ctx.clearRect(0, 0, W, H);
     const margin = 60, plotW = W - 2 * margin, uMin = 12, uMax = 115;
 
@@ -374,10 +397,9 @@ export default function Page() {
   const drawSection5 = useCallback((kernelPos: number) => {
     const canvas = cnnplotRef.current;
     if (!canvas) return;
-    resizeCanvas(canvas);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const W = canvas.width, H = canvas.height;
+    const setup = resizeCanvas(canvas, 280);
+    if (!setup) return;
+    const { ctx, W, H } = setup;
     ctx.clearRect(0, 0, W, H);
 
     const channels = [
